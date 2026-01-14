@@ -179,9 +179,9 @@ For more information checkout [Creating a pull request](https://docs.github.com/
 * Add details of the pull request below (the commit id of your change (you can find this using `git log`)
 
 ```sh
-commit:
-Author:
-Date:
+commit: 7feec4ccb7d3175ad259cd18d9241845ff52243e
+Author: Junwei Quan <junwei.quan@mail.utoronto.ca>
+Date: Wed Jan 14 14:18:42 2026 -0500
 ```
 
 ---
