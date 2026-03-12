@@ -1,0 +1,694 @@
+---
+title: "Midterm Project (OpenAlex): Publication Trends, Open Access, and Citations in Machine Learning Research at the University of Toronto"
+author: "Junwei Quan"
+date: last-modified
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    code-fold: true
+    code-tools: true
+    theme: cosmo
+jupyter: python3
+execute:
+  echo: false
+  message: false
+  warning: false
+  cache: false
+---
+
+## API key setup (required)
+
+Set the OpenAlex API key in Python before rendering:
+
+```{python}
+import os
+os.environ["OPENALEX_API_KEY"] = "oJupmDZ0id5qDSA6Fikwdt"
+```
+
+```{python}
+#| label: config
+#| include: false
+
+params = {
+    "institution_search": "University of Toronto",
+    "institution_pick": 1,
+    "start_year": 2015,
+    "end_year": 2025,
+    "type_filter": "article|preprint",
+}
+```
+
+# Introduction
+
+OpenAlex is an open scholarly catalog that provides a REST API for retrieving metadata on works, authors, institutions, sources, and topics. In this midterm, I study machine-learning research at the University of Toronto from 2015 to 2025. Instead of using a single OpenAlex topic, I define the corpus using a keyword-based search over works combined with an institution filter. This produces a broader machine-learning dataset than a single narrow topic ID.
+
+```{python}
+#| label: show-params
+from IPython.display import Markdown, display
+
+display(Markdown(
+    f"**Run settings**\n\n"
+    f"- **Institution:** `{params['institution_search']}`\n"
+    f"- **Corpus definition:** keyword-defined machine-learning works\n"
+    f"- **Time window:** `{params['start_year']}`-`{params['end_year']}`\n"
+    f"- **Work types:** `{params['type_filter']}`\n"
+))
+```
+
+## Research questions
+
+1. **Productivity trend:** How has the number of machine-learning publications at the University of Toronto changed over time?
+2. **Open access trend:** Has the share of open access (OA) works changed over time?
+3. **Citations and correlates:** How do citations relate to OA status, team size, international collaboration, and work type within this corpus?
+
+# Methods
+
+## Data acquisition (OpenAlex API)
+
+OpenAlex recommends resolving named entities such as institutions to stable OpenAlex IDs before filtering works. In this report, I first resolve the institution "University of Toronto" to its OpenAlex institution ID, then query `/works` using that institution filter together with a keyword-based search for machine-learning research.
+
+This report uses:
+
+- `GET /institutions?search=...` to resolve the institution ID
+- `GET /works?search=...&filter=...` to retrieve machine-learning works
+- pagination over yearly queries to collect the full corpus
+- `pandas` aggregation to compute yearly publication, OA, and international-collaboration trends
+
+## Tools and statistical methods
+
+- Data wrangling: `pandas`, `numpy`
+- API requests: `requests`
+- Visualization: `matplotlib`
+- Tables: pandas DataFrames rendered by Quarto
+- Statistical modeling: linear regression on `log1p(cited_by_count)` using `statsmodels`
+
+After retrieving work-level records from OpenAlex, I retain publication year/date, work type, citation count, open-access fields, author count, country count, institution count, venue information, and primary topic. I then construct derived variables including `international = (countries_distinct_count > 1)` and `log_cites = log1p(cited_by_count)`.
+
+> Note: Citation counts are highly right-skewed, so I use `log1p(cited_by_count)` in plots and regression.nts are heavy-tailed。
+
+## Code
+
+```{python}
+#| label: setup
+#| include: false
+
+import os
+import time
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import requests
+import matplotlib.pyplot as plt
+from matplotlib.ticker import FuncFormatter, PercentFormatter
+
+try:
+    import statsmodels.formula.api as smf
+    HAS_STATSMODELS = True
+except Exception:
+    smf = None
+    HAS_STATSMODELS = False
+
+plt.style.use("seaborn-v0_8-whitegrid")
+
+
+def require_api_key() -> str:
+    key = os.getenv("OPENALEX_API_KEY", "")
+    if not key:
+        raise RuntimeError(
+            "OPENALEX_API_KEY is not set. Please set it in your environment, then re-render this document."
+        )
+    return key
+
+
+def fmt_int(x) -> str:
+    if pd.isna(x):
+        return "NA"
+    return f"{int(x):,}"
+
+
+def fmt_pct(x) -> str:
+    if pd.isna(x):
+        return "NA"
+    return f"{100 * float(x):.1f}%"
+```
+
+```{python}
+#| label: helpers
+#| include: false
+
+OA_BASE = "https://api.openalex.org"
+
+
+def oa_get_json(path: str, query: dict | None = None, max_tries: int = 6, timeout_s: int = 30) -> dict:
+    api_key = require_api_key()
+    query = dict(query or {})
+    query["api_key"] = api_key
+
+    url = f"{OA_BASE}{path}"
+    headers = {"User-Agent": "JSC370-midterm-student-project"}
+
+    for i in range(1, max_tries + 1):
+        try:
+            response = requests.get(url, params=query, headers=headers, timeout=timeout_s)
+        except requests.RequestException:
+            time.sleep(min(2 ** (i - 1), 32))
+            continue
+
+        if response.status_code == 200:
+            return response.json()
+
+        if response.status_code in (429, 500, 502, 503, 504):
+            time.sleep(min(2 ** (i - 1), 32))
+            continue
+
+        raise RuntimeError(f"OpenAlex API error HTTP {response.status_code}: {response.text[:500]}")
+
+    raise RuntimeError("OpenAlex API request failed after retries.")
+
+
+def oa_search_institutions(search: str, n: int = 10) -> pd.DataFrame:
+    dat = oa_get_json(
+        path="/institutions",
+        query={
+            "search": search,
+            "per_page": n,
+            "select": "id,display_name,works_count,country_code,type,ror",
+        },
+    )
+
+    results = dat.get("results", []) or []
+    rows = []
+    for idx, item in enumerate(results, start=1):
+        rows.append(
+            {
+                "rank": idx,
+                "id": item.get("id"),
+                "display_name": item.get("display_name"),
+                "works_count": item.get("works_count"),
+                "country_code": item.get("country_code"),
+                "type": item.get("type"),
+                "ror": item.get("ror"),
+            }
+        )
+
+    return pd.DataFrame(
+        rows,
+        columns=["rank", "id", "display_name", "works_count", "country_code", "type", "ror"],
+    )
+
+
+def oa_short_id(openalex_url: str | None) -> str:
+    if not openalex_url:
+        return ""
+    return str(openalex_url).rstrip("/").split("/")[-1]
+
+
+def oa_group_by(filter_str: str, group_by: str) -> pd.DataFrame:
+    dat = oa_get_json(
+        path="/works",
+        query={"filter": filter_str, "group_by": group_by},
+    )
+    meta_count = ((dat.get("meta") or {}).get("count"))
+    rows = []
+    for item in dat.get("group_by", []) or []:
+        rows.append(
+            {
+                "key": item.get("key"),
+                "key_display_name": item.get("key_display_name"),
+                "count": item.get("count"),
+                "meta_count": meta_count,
+            }
+        )
+    return pd.DataFrame(rows, columns=["key", "key_display_name", "count", "meta_count"])
+
+
+def oa_fetch_works_for_year(inst_id: str, year: int, type_filter: str, ml_query: str) -> list[dict]:
+    out = []
+    page = 1
+
+    while True:
+        dat = oa_get_json(
+            path="/works",
+            query={
+                "search": ml_query,
+                "filter": ",".join([
+                    f"authorships.institutions.id:{inst_id}",
+                    f"publication_year:{year}",
+                    f"type:{type_filter}",
+                ]),
+                "per_page": 100,
+                "page": page,
+            },
+        )
+
+        results = dat.get("results", []) or []
+        if not results:
+            break
+
+        out.extend(results)
+
+        if len(results) < 100:
+            break
+
+        page += 1
+        time.sleep(0.2)
+
+    return out
+```
+
+## Step 1 - Resolve IDs (two-step)
+
+```{python}
+#| label: resolve-ids
+
+inst_candidates = oa_search_institutions(
+    search=params["institution_search"],
+    n=10,
+)
+
+display(Markdown("**Institution candidates (OpenAlex search)**"))
+display(inst_candidates)
+```
+
+```{python}
+#| label: choose-ids
+#| include: false
+
+inst_row = inst_candidates.loc[inst_candidates["rank"] == int(params["institution_pick"])]
+
+if len(inst_row) != 1:
+    raise RuntimeError("Institution pick did not match exactly one row. Adjust params['institution_pick'].")
+
+inst_row = inst_row.iloc[0]
+inst_id = oa_short_id(inst_row["id"])
+
+ML_QUERY = '"machine learning" OR "deep learning" OR "neural network" OR "neural networks" OR "artificial intelligence"'
+YEARS = list(range(int(params["start_year"]), int(params["end_year"]) + 1))
+```
+
+```{python}
+#| label: report-filter
+
+display(Markdown(
+    f"**Chosen institution:** {inst_row['display_name']} ({inst_id})\n\n"
+    f"**Corpus definition:** works matching the keyword query `{ML_QUERY}`\n\n"
+    f"**Filter logic:** institution ID + publication year + type filter + works search"
+))
+```
+
+## Step 2 - Retrieve the full machine-learning corpus
+
+```{python}
+#| label: fetch-corpus
+#| cache: true
+
+works_list = []
+for y in YEARS:
+    year_works = oa_fetch_works_for_year(
+        inst_id=inst_id,
+        year=y,
+        type_filter=params["type_filter"],
+        ml_query=ML_QUERY,
+    )
+    print(f"{y}: fetched {len(year_works)} works")
+    works_list.extend(year_works)
+
+rows = []
+for work in works_list:
+    primary_location = work.get("primary_location") or {}
+    source = primary_location.get("source") or {}
+    primary_topic = work.get("primary_topic") or {}
+    open_access = work.get("open_access") or {}
+    authorships = work.get("authorships") or []
+    ids = work.get("ids") or {}
+
+    rows.append(
+        {
+            "id": work.get("id"),
+            "doi": ids.get("doi"),
+            "title": work.get("display_name"),
+            "publication_year": work.get("publication_year"),
+            "publication_date": work.get("publication_date"),
+            "type": work.get("type"),
+            "cited_by_count": work.get("cited_by_count"),
+            "is_oa": open_access.get("is_oa"),
+            "oa_status": open_access.get("oa_status"),
+            "authors_count": len(authorships),
+            "countries_distinct_count": work.get("countries_distinct_count"),
+            "institutions_distinct_count": work.get("institutions_distinct_count"),
+            "venue": source.get("display_name"),
+            "primary_topic_name": primary_topic.get("display_name"),
+        }
+    )
+
+works = pd.DataFrame(rows).drop_duplicates(subset="id")
+
+if not works.empty:
+    works["publication_year"] = pd.to_numeric(works["publication_year"], errors="coerce").astype("Int64")
+    works["publication_date"] = pd.to_datetime(works["publication_date"], errors="coerce")
+    works["cited_by_count"] = pd.to_numeric(works["cited_by_count"], errors="coerce").fillna(0).astype(int)
+    works["authors_count"] = pd.to_numeric(works["authors_count"], errors="coerce")
+    works["countries_distinct_count"] = pd.to_numeric(works["countries_distinct_count"], errors="coerce")
+    works["institutions_distinct_count"] = pd.to_numeric(works["institutions_distinct_count"], errors="coerce")
+    works["international"] = works["countries_distinct_count"] > 1
+    works["log_cites"] = np.log1p(works["cited_by_count"])
+else:
+    works["international"] = pd.Series(dtype=bool)
+    works["log_cites"] = pd.Series(dtype=float)
+
+total_works = int(len(works))
+
+data_dir = Path("data")
+data_dir.mkdir(parents=True, exist_ok=True)
+works.to_pickle(data_dir / "openalex_ml_works_full.pkl")
+
+works.head()
+```
+
+## Step 3 - Aggregate yearly trends from the full corpus
+
+```{python}
+#| label: build-trend
+if works.empty:
+    trend = pd.DataFrame(
+        {
+            "year": pd.Series(dtype="Int64"),
+            "n_works": pd.Series(dtype=int),
+            "n_oa": pd.Series(dtype=int),
+            "n_international": pd.Series(dtype=int),
+            "share_oa": pd.Series(dtype=float),
+            "share_international": pd.Series(dtype=float),
+        }
+    )
+else:
+    trend = (
+        works.groupby("publication_year", as_index=False)
+        .agg(
+            n_works=("id", "nunique"),
+            n_oa=("is_oa", lambda x: pd.Series(x).fillna(False).sum()),
+            n_international=("international", "sum"),
+        )
+        .rename(columns={"publication_year": "year"})
+        .sort_values("year")
+    )
+
+    trend["share_oa"] = trend["n_oa"] / trend["n_works"]
+    trend["share_international"] = trend["n_international"] / trend["n_works"]
+
+trend
+```
+
+## Step 4 - Row-level data for EDA and regression
+
+```{python}
+#| label: row-level-prep
+
+# make a clean copy for row-level analysis
+row_df = works.copy()
+
+if not row_df.empty:
+    row_df["publication_year"] = pd.to_numeric(row_df["publication_year"], errors="coerce").astype("Int64")
+    row_df["publication_date"] = pd.to_datetime(row_df["publication_date"], errors="coerce")
+    row_df["cited_by_count"] = pd.to_numeric(row_df["cited_by_count"], errors="coerce").fillna(0).astype(int)
+    row_df["authors_count"] = pd.to_numeric(row_df["authors_count"], errors="coerce")
+    row_df["countries_distinct_count"] = pd.to_numeric(row_df["countries_distinct_count"], errors="coerce")
+    row_df["institutions_distinct_count"] = pd.to_numeric(row_df["institutions_distinct_count"], errors="coerce")
+
+    # derived variables
+    row_df["international"] = row_df["countries_distinct_count"] > 1
+    row_df["log_cites"] = np.log1p(row_df["cited_by_count"])
+else:
+    row_df["international"] = pd.Series(dtype=bool)
+    row_df["log_cites"] = pd.Series(dtype=float)
+
+# save a copy for reproducibility
+data_dir = Path("data")
+data_dir.mkdir(parents=True, exist_ok=True)
+row_df.to_pickle(data_dir / "openalex_ml_rowlevel.pkl")
+
+row_n = int(len(row_df))
+row_df.head()
+```
+
+
+# Preliminary Results
+
+## Dataset overview
+
+The dataset consists of University of Toronto works published between 2015 and 2025 that match a machine-learning keyword search in OpenAlex. I use the full matched corpus for both yearly trend analysis and row-level EDA.
+
+```{python}
+#| label: overview-table
+
+overview_tbl = pd.DataFrame(
+    {
+        "Metric": [
+            "Institution",
+            "Corpus definition",
+            "Years",
+            "Work types",
+            "Total works in corpus",
+            "Row-level analysis dataset",
+        ],
+        "Value": [
+            f"{inst_row['display_name']} ({inst_id})",
+            "Keyword-defined machine-learning works",
+            f"{params['start_year']}-{params['end_year']}",
+            params["type_filter"],
+            f"{total_works:,}",
+            f"{total_works:,} (full corpus)",
+        ],
+    }
+)
+
+overview_tbl
+```
+
+## Publication trend over time
+
+```{python}
+#| label: fig-trend
+
+fig, ax = plt.subplots(figsize=(10, 4))
+ax.plot(trend["year"], trend["n_works"], marker="o", linewidth=1.5)
+ax.set_title("Machine-learning publications per year")
+ax.set_xlabel("")
+ax.set_ylabel("Number of works")
+ax.set_xticks(range(int(params["start_year"]), int(params["end_year"]) + 1))
+ax.yaxis.set_major_formatter(FuncFormatter(lambda x, pos: f"{int(x):,}"))
+plt.tight_layout()
+plt.show()
+```
+
+## Open access share over time
+
+```{python}
+#| label: fig-oa
+
+fig, ax = plt.subplots(figsize=(10, 4))
+ax.plot(trend["year"], trend["share_oa"], marker="o", linewidth=1.5)
+ax.set_title("Open-access share by year")
+ax.set_xlabel("")
+ax.set_ylabel("Share open access")
+ax.set_xticks(range(int(params["start_year"]), int(params["end_year"]) + 1))
+ax.yaxis.set_major_formatter(PercentFormatter(1.0))
+plt.tight_layout()
+plt.show()
+```
+
+## International collaboration share over time
+
+International collaboration is proxied by `countries_distinct_count > 1` (a work has authors affiliated with institutions in more than one country).
+
+```{python}
+#| label: fig-intl
+
+fig, ax = plt.subplots(figsize=(10, 4))
+ax.plot(trend["year"], trend["share_international"], marker="o", linewidth=1.5)
+ax.set_title("International collaboration share by year")
+ax.set_xlabel("")
+ax.set_ylabel("Share international")
+ax.set_xticks(range(int(params["start_year"]), int(params["end_year"]) + 1))
+ax.yaxis.set_major_formatter(PercentFormatter(1.0))
+plt.tight_layout()
+plt.show()
+```
+
+## Citation distributions
+
+```{python}
+#| label: fig-cite-hist
+
+fig, ax = plt.subplots(figsize=(9, 4))
+ax.hist(works["log_cites"].dropna(), bins=40)
+ax.set_title("Citation distribution in the corpus (log1p scale)")
+ax.set_xlabel("log1p(cited_by_count)")
+ax.set_ylabel("Number of works")
+plt.tight_layout()
+plt.show()
+```
+
+```{python}
+#| label: cite-by-oa-table
+
+cite_by_oa = (
+    works.dropna(subset=["is_oa"])
+    .groupby("is_oa", dropna=False)
+    .agg(
+        n=("id", "size"),
+        median_cites=("cited_by_count", "median"),
+        mean_cites=("cited_by_count", "mean"),
+    )
+    .reset_index()
+)
+cite_by_oa["is_oa"] = cite_by_oa["is_oa"].map({True: "OA", False: "Closed"})
+cite_by_oa["median_cites"] = cite_by_oa["median_cites"].round(0).astype(int)
+cite_by_oa["mean_cites"] = cite_by_oa["mean_cites"].round(1)
+
+cite_by_oa
+```
+
+## Team size and citations
+
+```{python}
+#| label: fig-team
+
+works_team = works.loc[
+    works["authors_count"].notna() & (works["authors_count"] <= 50)
+].copy()
+
+fig, ax = plt.subplots(figsize=(9, 5))
+ax.scatter(works_team["authors_count"], works_team["log_cites"], alpha=0.35)
+
+if len(works_team) >= 2:
+    coeffs = np.polyfit(works_team["authors_count"], works_team["log_cites"], deg=1)
+    x_line = np.linspace(works_team["authors_count"].min(), works_team["authors_count"].max(), 100)
+    ax.plot(x_line, coeffs[0] * x_line + coeffs[1], color="black", linewidth=1.5)
+
+ax.set_title("Team size vs citations (trimmed to <= 50 authors for readability)")
+ax.set_xlabel("Number of authors")
+ax.set_ylabel("log1p(cited_by_count)")
+plt.tight_layout()
+plt.show()
+```
+
+## Preliminary statistical model
+
+This regression is descriptive rather than causal. It controls for OA status, team size, international collaboration, work type, and publication-year fixed effects. I use year fixed effects rather than a linear time trend because citation accumulation differs strongly across publication years.
+
+```{python}
+#| label: model
+
+model_df = works[
+    [
+        "log_cites",
+        "publication_year",
+        "is_oa",
+        "authors_count",
+        "international",
+        "type",
+    ]
+].copy()
+
+model_df = model_df.dropna(
+    subset=["log_cites", "publication_year", "is_oa", "authors_count", "international", "type"]
+)
+model_df = model_df.loc[(model_df["authors_count"] > 0) & (model_df["authors_count"] <= 200)].copy()
+
+model_df["publication_year"] = pd.to_numeric(model_df["publication_year"], errors="coerce")
+model_df = model_df.dropna(subset=["publication_year"]).copy()
+model_df["publication_year"] = model_df["publication_year"].astype(int).astype(str)
+
+model_df["authors_count"] = pd.to_numeric(model_df["authors_count"], errors="coerce")
+model_df = model_df.dropna(subset=["authors_count"]).copy()
+
+model_df["is_oa"] = model_df["is_oa"].map({False: "Closed", True: "OA"}).astype(str)
+model_df["international"] = model_df["international"].map({False: "No", True: "Yes"}).astype(str)
+model_df["type"] = model_df["type"].astype(str)
+
+if HAS_STATSMODELS:
+    lm_fit = smf.ols(
+        "log_cites ~ C(is_oa) + authors_count + C(international) + C(type) + C(publication_year)",
+        data=model_df,
+    ).fit(cov_type="HC3")
+
+    conf_int = lm_fit.conf_int()
+    lm_tbl = pd.DataFrame(
+        {
+            "term": lm_fit.params.index,
+            "estimate": lm_fit.params.values,
+            "conf.low": conf_int[0].values,
+            "conf.high": conf_int[1].values,
+            "p.value": lm_fit.pvalues.values,
+        }
+    )
+else:
+    lm_tbl = pd.DataFrame()
+
+term_map = {
+    "Intercept": "Intercept",
+    "C(is_oa)[T.OA]": "OA (vs Closed)",
+    "authors_count": "Authors count",
+    "C(international)[T.Yes]": "International (vs No)",
+}
+
+lm_tbl["term"] = lm_tbl["term"].map(lambda x: term_map.get(x, x))
+lm_tbl
+```
+
+# Summary and plan for the final project
+
+## What I found so far (midterm)
+
+```{python}
+#| label: inline-summaries
+
+count_start_series = trend.loc[trend["year"] == int(params["start_year"]), "n_works"]
+count_end_series = trend.loc[trend["year"] == int(params["end_year"]), "n_works"]
+oa_start_series = trend.loc[trend["year"] == int(params["start_year"]), "share_oa"]
+oa_end_series = trend.loc[trend["year"] == int(params["end_year"]), "share_oa"]
+intl_start_series = trend.loc[trend["year"] == int(params["start_year"]), "share_international"]
+intl_end_series = trend.loc[trend["year"] == int(params["end_year"]), "share_international"]
+
+count_start = count_start_series.iloc[0] if not count_start_series.empty else np.nan
+count_end = count_end_series.iloc[0] if not count_end_series.empty else np.nan
+oa_start = oa_start_series.iloc[0] if not oa_start_series.empty else np.nan
+oa_end = oa_end_series.iloc[0] if not oa_end_series.empty else np.nan
+intl_start = intl_start_series.iloc[0] if not intl_start_series.empty else np.nan
+intl_end = intl_end_series.iloc[0] if not intl_end_series.empty else np.nan
+
+oa_coef_series = lm_tbl.loc[lm_tbl["term"] == "OA (vs Closed)", "estimate"]
+oa_coef = oa_coef_series.iloc[0] if not oa_coef_series.empty else np.nan
+
+display(Markdown(
+    f"- The corpus contains **{fmt_int(total_works)}** machine-learning works in OpenAlex.\n"
+    f"- Annual output changed from **{fmt_int(count_start)}** works in {params['start_year']} "
+    f"to **{fmt_int(count_end)}** works in {params['end_year']}.\n"
+    f"- The open-access share changed from **{fmt_pct(oa_start)}** to **{fmt_pct(oa_end)}** over the same period.\n"
+    f"- International collaboration share changed from **{fmt_pct(intl_start)}** to **{fmt_pct(intl_end)}**.\n"
+    f"- In a descriptive regression on the full corpus, the OA coefficient is "
+    f"**{oa_coef:.3f}** on the log-citation scale after controlling for team size, "
+    f"international collaboration, work type, and publication-year fixed effects."
+))
+```
+
+A key limitation is that the corpus is defined using search terms rather than a hand-validated subject list, so it may include some false positives and may miss some machine-learning works that do not use these terms explicitly.
+
+## Plan for the final project (ML + interactive output)
+
+For the final project, I will extend this analysis in three ways:
+
+1. **Feature expansion (data engineering)**
+   - Pull additional fields for each work (e.g., venue characteristics, keywords, fulltext availability, retraction flags, etc.).
+   - Build richer collaboration indicators (e.g., number of countries, number of institutions, partner country mix).
+
+2. **Machine learning modeling**
+   - Predict citation outcomes (regression on `cited_by_count` or citation-normalized metrics) using regularized regression and tree-based models.
+   - Compare models with cross-validation and evaluate calibration and robustness across years.
+
+3. **Interactive communication (website / dashboard)**
+   - Publish the analysis to a GitHub Pages site using Quarto.
+   - Add interactive components such as keyword-set comparisons, institution comparisons, and interactive trend charts.
