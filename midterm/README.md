@@ -42,3 +42,12 @@ Create and activate a conda environment, then install the required Python packag
 conda create -n jsc370-midterm python=3.11
 conda activate jsc370-midterm
 pip install -r requirements.txt
+```
+
+## Render the report
+
+Set your OpenAlex API key in the code (see `midterm.qmd`), then render the Quarto source:
+
+```bash
+quarto render midterm.qmd --to html
+```
