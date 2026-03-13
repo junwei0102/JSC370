@@ -18,13 +18,13 @@ execute:
   cache: false
 ---
 
-## API key setup (required)
+## API key setup
 
 Set the OpenAlex API key in Python before rendering:
 
 ```{python}
 import os
-os.environ["OPENALEX_API_KEY"] = "oJupmDZ0id5qDSA6Fikwdt"
+os.environ["OPENALEX_API_KEY"] = "YOUR_KEY_HERE"
 ```
 
 ```{python}
