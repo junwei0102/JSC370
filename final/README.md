@@ -4,8 +4,6 @@
 
 This repository contains a Quarto website and analysis pipeline for a JSC370 final project on University of Toronto machine-learning publications indexed by OpenAlex. The project studies how publication metadata relate to citation impact and how well those metadata can predict citation outcomes.
 
-Project website: <https://junwei0102.github.io/JSC370/final/>
-
 ## Research focus
 
 The dataset includes keyword-defined machine-learning works affiliated with the University of Toronto from 2015 to 2025. The analysis addresses three questions:
