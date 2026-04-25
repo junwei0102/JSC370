@@ -102,6 +102,5 @@ The best-performing model is saved to `models/best_citation_model.joblib`, and p
 
 ## Links
 
-- Website: <https://junwei0102.github.io/JSC370/final/>
-- Report page: <https://junwei0102.github.io/JSC370/final/report.html>
-- Interactive visualizations: <https://junwei0102.github.io/JSC370/final/viz.html>
+- Website: <https://junwei0102.github.io/JSC370/>
+- GitHub repository: <https://github.com/junwei0102/JSC370/tree/main/final>
