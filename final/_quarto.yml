@@ -1,0 +1,30 @@
+project:
+  type: website
+  output-dir: docs
+
+website:
+  title: "JSC370 Final Project"
+  navbar:
+    left:
+      - text: "Home"
+        href: index.qmd
+      - text: "Report"
+        href: report.qmd
+      - text: "Interactive Visualizations"
+        href: viz.qmd
+    right:
+      - text: "GitHub"
+        href: "https://github.com/junwei0102/JSC370"
+  page-footer: "JSC370 Final Project | Junwei Quan"
+
+format:
+  html:
+    theme: cosmo
+    toc: true
+    number-sections: true
+
+execute:
+  echo: false
+  message: false
+  warning: false
+  cache: true

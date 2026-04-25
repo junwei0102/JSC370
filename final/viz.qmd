@@ -1,0 +1,180 @@
+---
+title: "Interactive Visualizations"
+author: "Junwei Quan"
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    theme: cosmo
+jupyter: python3
+execute:
+  echo: false
+  message: false
+  warning: false
+---
+
+# Interactive Visualizations
+
+This page provides interactive visualizations for the final project on University of Toronto machine-learning publications in OpenAlex. The figures are designed to complement the written report by allowing users to explore annual trends, publication-level citation patterns, and model interpretation results.
+
+```{python}
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import plotly.express as px
+
+DATA_DIR = Path("data")
+
+df = pd.read_parquet(DATA_DIR / "openalex_ml_works_clean.parquet")
+
+trend = (
+    df.groupby("publication_year", as_index=False)
+    .agg(
+        n_works=("id", "nunique"),
+        n_oa=("is_oa", lambda x: (x == "OA").sum()),
+        n_international=("international", lambda x: (x == "Yes").sum()),
+    )
+    .rename(columns={"publication_year": "year"})
+    .sort_values("year")
+)
+
+trend["Open-access share"] = trend["n_oa"] / trend["n_works"]
+trend["International-collaboration share"] = trend["n_international"] / trend["n_works"]
+```
+
+## Annual publication output
+
+```{python}
+fig = px.line(
+    trend,
+    x="year",
+    y="n_works",
+    markers=True,
+    labels={
+        "year": "Publication year",
+        "n_works": "Number of works",
+    },
+    title="Annual number of keyword-defined machine-learning works",
+)
+
+fig.update_layout(
+    hovermode="x unified",
+)
+
+fig.show()
+```
+
+**Figure 1.** This interactive line chart shows the annual number of keyword-defined machine-learning works affiliated with the University of Toronto from 2015 to 2025.
+
+## Open access and international collaboration
+
+```{python}
+trend_long = trend.melt(
+    id_vars="year",
+    value_vars=["Open-access share", "International-collaboration share"],
+    var_name="Metric",
+    value_name="Share",
+)
+
+fig = px.line(
+    trend_long,
+    x="year",
+    y="Share",
+    color="Metric",
+    markers=True,
+    labels={
+        "year": "Publication year",
+        "Share": "Share of works",
+    },
+    title="Open access and international collaboration over time",
+)
+
+fig.update_yaxes(tickformat=".0%")
+fig.update_layout(
+    hovermode="x unified",
+)
+
+fig.show()
+```
+
+**Figure 2.** This interactive chart compares open-access share and international-collaboration share over time. Users can click the legend to show or hide either metric.
+
+## Citation explorer
+
+```{python}
+plot_df = df.copy()
+
+plot_df["short_title"] = (
+    plot_df["title"]
+    .fillna("Untitled")
+    .astype(str)
+    .str.slice(0, 100)
+)
+
+plot_df["venue"] = plot_df["venue"].fillna("Unknown")
+plot_df["primary_topic_name"] = plot_df["primary_topic_name"].fillna("Unknown")
+
+# Sampling keeps the interactive plot responsive if the dataset is large.
+if len(plot_df) > 5000:
+    plot_df = plot_df.sample(5000, random_state=370)
+
+fig = px.scatter(
+    plot_df,
+    x="authors_count",
+    y="log_cites_per_year",
+    color="is_oa",
+    hover_name="short_title",
+    hover_data={
+        "publication_year": True,
+        "venue": True,
+        "primary_topic_name": True,
+        "authors_count": True,
+        "cited_by_count": True,
+        "log_cites_per_year": ":.3f",
+        "is_oa": True,
+    },
+    labels={
+        "authors_count": "Number of authors",
+        "log_cites_per_year": "log(1 + citations per year)",
+        "is_oa": "Open-access status",
+    },
+    title="Team size and citation impact",
+)
+
+fig.update_traces(marker={"opacity": 0.55})
+fig.show()
+```
+
+**Figure 3.** This publication-level citation explorer shows the relationship between team size and citation impact. Hover text provides paper-level metadata including title, year, venue, topic, and citation count.
+
+## Model variable importance
+
+```{python}
+importance = pd.read_csv("tables/variable_importance.csv")
+
+importance_top = (
+    importance
+    .sort_values("importance_mean", ascending=False)
+    .head(15)
+    .sort_values("importance_mean", ascending=True)
+)
+
+fig = px.bar(
+    importance_top,
+    x="importance_mean",
+    y="feature",
+    orientation="h",
+    error_x="importance_sd",
+    labels={
+        "importance_mean": "Permutation importance",
+        "importance_sd": "Standard deviation",
+        "feature": "Feature",
+    },
+    title="Top predictors from the best-performing citation model",
+)
+
+fig.show()
+```
+
+**Figure 4.** This interactive bar chart shows permutation importance from the best-performing XGBoost model. Larger values indicate that shuffling the feature caused a greater decrease in predictive performance.

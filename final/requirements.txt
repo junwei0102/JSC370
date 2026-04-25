@@ -1,0 +1,12 @@
+ipykernel
+jupyter
+matplotlib
+numpy
+pandas
+requests
+statsmodels
+scikit-learn
+xgboost
+plotly
+pyarrow
+tabulate

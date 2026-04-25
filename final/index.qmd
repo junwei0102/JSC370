@@ -1,0 +1,47 @@
+---
+title: "Predicting Citation Impact in UofT Machine-Learning Research"
+author: "Junwei Quan"
+format:
+  html:
+    theme: cosmo
+    toc: false
+---
+
+# Predicting Citation Impact in University of Toronto Machine-Learning Research
+
+This project studies keyword-defined machine-learning publications affiliated with the University of Toronto from 2015 to 2025 using metadata from the OpenAlex API. Building on my midterm project, the final analysis shifts from descriptive trends to predictive modeling of citation impact.
+
+The main research question is:
+
+> Which publication metadata are associated with citation impact, and how well can those metadata predict citation outcomes?
+
+## Project summary
+
+The analysis uses OpenAlex publication-level metadata for articles and preprints linked to the University of Toronto institution ID `I185261750`. The corpus is defined using a keyword search for machine-learning-related terms such as “machine learning,” “deep learning,” “neural network,” and “artificial intelligence.”
+
+The project examines three main questions:
+
+1. How did University of Toronto machine-learning publication output, open-access share, and international collaboration change from 2015 to 2025?
+2. How well can publication metadata predict citation impact?
+3. Which features are most important for predicting citation impact?
+
+## Main findings
+
+The final corpus shows strong growth in keyword-defined machine-learning publications between 2015 and 2025. Open-access rates remained consistently high, while international collaboration increased more gradually.
+
+For predictive modeling, I compared Ridge regression, Random Forest, and XGBoost using `log(1 + citations per year)` as the main outcome. XGBoost performed best on the held-out test set:
+
+| Model | RMSE | MAE | R² |
+|---|---:|---:|---:|
+| XGBoost | 0.792 | 0.582 | 0.369 |
+| Random Forest | 0.810 | 0.595 | 0.340 |
+| Ridge regression | 0.835 | 0.618 | 0.298 |
+
+The most important predictors were publication year, work type, venue group, author count, title length, open-access status, countries count, and topic group. These results suggest that citation impact is associated with time, publication format, venue/topic context, collaboration structure, and openness. However, the model results should be interpreted as predictive associations rather than causal effects.
+
+## Project materials
+
+- [Read the full report](report.html)
+- [Download the PDF report](report.pdf)
+- [View interactive visualizations](viz.html)
+- [GitHub repository](https://github.com/junwei0102/JSC370)
