@@ -44,4 +44,4 @@ The most important predictors were publication year, work type, venue group, aut
 - [Read the full report](report.html)
 - [Download the PDF report](report.pdf)
 - [View interactive visualizations](viz.html)
-- [GitHub repository](https://github.com/junwei0102/JSC370)
+- [GitHub repository](https://github.com/junwei0102/JSC370/tree/main/final)

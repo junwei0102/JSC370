@@ -28,8 +28,6 @@ The project uses the OpenAlex API:
 
 Saved datasets:
 
-- `data/openalex_ml_works_raw.parquet`
-- `data/openalex_ml_works_raw.csv`
 - `data/openalex_ml_works_clean.parquet`
 - `data/openalex_ml_works_clean.csv`
 
@@ -49,7 +47,6 @@ Generated outputs:
 - `tables/model_performance.csv`
 - `tables/variable_importance.csv`
 - `figures/variable_importance.png`
-- `models/best_citation_model.joblib`
 - `docs/`: rendered website output for GitHub Pages
 
 ## Reproducibility
